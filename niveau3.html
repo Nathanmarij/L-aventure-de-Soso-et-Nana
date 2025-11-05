@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 <!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -237,3 +238,382 @@ function onWindowResize(){
 </script>
 </body>
 </html>
+=======
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>Niveau - Tourelle & alliés (paps)</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #222; font-family: sans-serif; }
+  #instructions { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); color: #fff; text-align: center; font-size: 16px; }
+  #hud { position: absolute; left: 10px; top: 10px; color: #fff; font-size: 16px; background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 8px; }
+  #startText { position: absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:#fff; text-align:center; background: rgba(0,0,0,0.7); padding:20px; border-radius:10px; max-width:600px; }
+  #messageFinish { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); color:black; font-size:28px; display:none; }
+</style>
+</head>
+<body>
+<div id="instructions">E pour tirer (sur la tourelle)</div>
+<div id="hud">Snoopy: <span id="hpPlayer">—</span>pv ▪ Tourelle: <span id="hpTurret">—</span>pv</div>
+<div id="startText">Comme tu es super forte à lol tu devrait passer ce niveau facilement<br>Appuie sur <strong>Entrée</strong> pour commencer.</div>
+<div id="messageFinish">Bravo — tu as détruit la tourelle !</div>
+<div id="messageDeath" style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);color:red;font-size:28px;display:none;text-align:center;background:rgba(0,0,0,0.7);padding:20px;border-radius:10px;">
+Tu es mort ! Pour recommencer,<br>Appuie sur <strong>Entrée</strong>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.121.1/build/three.module.js';
+import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.121.1/examples/jsm/loaders/GLTFLoader.js';
+
+const MOVE_SPEED = 0.08;
+const PLAYER_HEIGHT = 0.12;
+const GRAVITY = -0.005;
+const MAX_PAPS_ACTIVE = 5;
+const PAP_HP = 3;
+const PAP_DAMAGE_PER_SEC = 3;
+const TURRET_HP_MAX = 1000;
+const PLAYER_HP_MAX = 300;
+const PROJECTILE_SPEED = 0.6;
+const TURRET_RANGE = 10;
+const TURRET_FIRE_COOLDOWN = 1.2;
+const PLAYER_SHOOT_COOLDOWN = 0.5;
+const SPAWN_INTERVAL = 4.0;
+const PLAYER_DAMAGE = 43;    // dégâts infligés par Snoopy
+const TURRET_DAMAGE = 83;    // dégâts infligés par la tourelle
+const PAP_DAMAGE = 3;       // dégâts infligés par les Frank
+
+let scene, camera, renderer, clock = new THREE.Clock();
+let loaderGLTF = new GLTFLoader();
+let player = null, mixer = null;
+let turret = null, attackRing = null;
+let paps = []; 
+let projectiles = [];
+
+let keys = { z:false, q:false, s:false, d:false };
+let velocityY = 0, canJump = false, gameStarted = false;
+
+let playerHP = PLAYER_HP_MAX;
+let turretHP = TURRET_HP_MAX;
+let turretFireTimer = 0;
+let canPlayerShoot = true;
+let playerShootTimer = 0;
+let spawnTimer = 0;
+
+
+const hudHpPlayer = document.getElementById('hpPlayer');
+const hudHpTurret = document.getElementById('hpTurret');
+const startText = document.getElementById('startText');
+const messageFinish = document.getElementById('messageFinish');
+
+init();
+animate();
+
+function init(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x87ceeb);
+
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 0.6);
+  hemi.position.set(0,200,0); scene.add(hemi);
+  const dir = new THREE.DirectionalLight(0xffffff, 0.6);
+  dir.position.set(100,100,100); dir.castShadow=true; scene.add(dir);
+
+  camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 0.1, 1000);
+  camera.position.set(0, 2.5, 6);
+
+  renderer = new THREE.WebGLRenderer({antialias:true});
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  document.body.appendChild(renderer.domElement);
+
+  const tex = new THREE.TextureLoader().load('./textures/grass.jpg');
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping; tex.repeat.set(20,20);
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(200,200), new THREE.MeshStandardMaterial({map:tex}));
+  ground.rotation.x=-Math.PI/2; ground.receiveShadow=true; scene.add(ground);
+
+  loaderGLTF.load('./models/snoopy.glb', gltf=>{
+    player = gltf.scene; player.scale.set(0.4,0.4,0.4); player.position.set(0, PLAYER_HEIGHT, 0);
+    player.traverse(c=>{ if(c.isMesh){ c.castShadow=true; c.receiveShadow=true; } });
+    scene.add(player);
+    if(gltf.animations.length){ mixer=new THREE.AnimationMixer(player); mixer.clipAction(gltf.animations[0]).play(); }
+  });
+
+  loaderGLTF.load('./models/turret.glb', gltf=>{
+    turret = gltf.scene; turret.position.set(0,0,-12); turret.scale.set(1,1,1);
+    turret.traverse(c=>{ if(c.isMesh){ c.castShadow=true; c.receiveShadow=true; } });
+    scene.add(turret); createAttackRing();
+  }, undefined, ()=>{ createFallbackTurret(); createAttackRing(); });
+
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('keyup', onKeyUp);
+  window.addEventListener('resize', onWindowResize);
+
+  updateHUD();
+}
+
+function createFallbackTurret(){
+  turret = new THREE.Mesh(new THREE.CylinderGeometry(0.6,0.6,1.6,12), new THREE.MeshStandardMaterial({color:0x3333ff}));
+  turret.position.set(0,0.8,-12); turret.castShadow = turret.receiveShadow = true; scene.add(turret);
+}
+
+function createAttackRing(){
+  const inner = TURRET_RANGE-0.1;
+  const outer = TURRET_RANGE+0.1;
+  const ringGeo = new THREE.RingGeometry(inner, outer, 64);
+  const ringMat = new THREE.MeshBasicMaterial({color:0xff4444, transparent:true, opacity:0.35, side:THREE.DoubleSide});
+  attackRing = new THREE.Mesh(ringGeo, ringMat);
+  attackRing.rotation.x=-Math.PI/2; attackRing.position.copy(turret.position); attackRing.position.y=0.02; scene.add(attackRing);
+}
+
+function onKeyDown(e){
+  if(e.key==='Enter' && !gameStarted){ gameStarted=true; startText.style.display='none'; resetAll(); }
+  if(!gameStarted) return;
+  if(e.key.toLowerCase()==='z') keys.z=true;
+  if(e.key.toLowerCase()==='s') keys.s=true;
+  if(e.key.toLowerCase()==='q') keys.q=true;
+  if(e.key.toLowerCase()==='d') keys.d=true;
+  if(e.key===' ' && canJump){ velocityY=0.15; canJump=false; }
+  if(e.key.toLowerCase()==='e' && canPlayerShoot && player && turret){
+    const distToTurret = player.position.distanceTo(turret.position);
+    if(distToTurret <= TURRET_RANGE) {  // uniquement si Snoopy est dans la zone
+        const origin = player.position.clone(); origin.y+=0.6;
+        const dir = turret.position.clone().sub(origin);
+        spawnProjectile(origin, dir, 'player', turret);
+        canPlayerShoot=false; playerShootTimer=0;
+    }
+}
+
+}
+
+function onKeyUp(e){
+  if(e.key.toLowerCase()==='z') keys.z=false;
+  if(e.key.toLowerCase()==='s') keys.s=false;
+  if(e.key.toLowerCase()==='q') keys.q=false;
+  if(e.key.toLowerCase()==='d') keys.d=false;
+}
+
+function updateHUD(){ hudHpPlayer.textContent=Math.max(0,Math.round(playerHP)); hudHpTurret.textContent=Math.max(0,Math.round(turretHP)); }
+function resetAll(){
+  paps.forEach(p=>scene.remove(p.mesh)); paps=[];
+  projectiles.forEach(p=>scene.remove(p.mesh)); projectiles=[];
+  playerHP=PLAYER_HP_MAX; turretHP=TURRET_HP_MAX;
+  turretFireTimer=0; canPlayerShoot=true; playerShootTimer=0; spawnTimer=0;
+  updateHUD(); messageFinish.style.display='none';
+}
+
+// ---------- SPAWN PAPS BLOCS ----------
+function spawnPapAt(x,z,speed=0.05){
+  if(paps.length>=MAX_PAPS_ACTIVE) return;
+  const geometry = new THREE.BoxGeometry(0.6,0.6,0.6);
+  const material = new THREE.MeshStandardMaterial({color:0x66ddff});
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(x,0.3,z); mesh.castShadow=true; mesh.receiveShadow=true;
+  scene.add(mesh);
+  paps.push({mesh, hp:PAP_HP, speed});
+}
+
+// ---------- PROJECTILES ----------
+function spawnProjectile(origin,direction,owner,target=null){
+  const mesh=new THREE.Mesh(new THREE.SphereGeometry(0.12,8,8), new THREE.MeshStandardMaterial({
+    color: owner==='player'?0xffcc33:0xff4444, emissive: owner==='player'?0xffcc33:0xff4444
+  }));
+  mesh.position.copy(origin); scene.add(mesh);
+  const vel = direction.clone().normalize().multiplyScalar(PROJECTILE_SPEED);
+  projectiles.push({mesh, vel, owner, target});
+}
+
+function updateProjectiles(delta){
+  for(let i=projectiles.length-1;i>=0;i--){
+    const p=projectiles[i];
+    p.mesh.position.addScaledVector(p.vel, delta*60);
+
+  function flashTurret() {
+    if(!turret) return;
+
+    // Stocke l'émissive originale de chaque mesh
+    const originalEmissives = [];
+    turret.traverse(c => {
+        if(c.isMesh){
+            originalEmissives.push({mesh: c, emissive: c.material.emissive.clone()});
+            c.material.emissive.setHex(0xff0000); // flash rouge
+        }
+    });
+
+    setTimeout(()=>{
+        // Remet l'émissive originale sans toucher à la texture
+        originalEmissives.forEach(o => {
+            o.mesh.material.emissive.copy(o.emissive);
+        });
+    }, 150); // 150ms de flash
+}
+
+
+    if(p.owner==='player'){
+      if(turret && p.mesh.position.distanceTo(turret.position)<0.9){
+        turretHP-=PLAYER_DAMAGE; 
+        flashTurret();
+        scene.remove(p.mesh); projectiles.splice(i,1);
+        if(turretHP<=0){ turretHP=0; onTurretDestroyed(); }
+        updateHUD(); continue;
+      }
+    } else {
+      let hit=false;
+      for(let j=0;j<paps.length;j++){
+        const s=paps[j];
+        if(p.mesh.position.distanceTo(s.mesh.position)<0.6){
+          s.hp-=1; scene.remove(p.mesh); projectiles.splice(i,1);
+          if(s.hp<=0){ scene.remove(s.mesh); paps.splice(j,1); }
+
+          // --- NOUVEAU : cooldown réduit à 0.7 pour le prochain tir ---
+          if(turretFireTimer > 0.3) turretFireTimer = 0.3;
+
+          hit=true; break;
+        }
+      }
+      if(hit) continue;
+      function flashPlayer() {
+    if(!player) return;
+    player.traverse(c => { if(c.isMesh) c.material.emissive.setHex(0xff0000); });
+    setTimeout(()=>{
+        player.traverse(c => { if(c.isMesh) c.material.emissive.setHex(0x000000); });
+    },150);
+}
+      if(player && p.mesh.position.distanceTo(player.position)<0.8){
+        playerHP-=TURRET_DAMAGE; 
+        flashPlayer();
+        scene.remove(p.mesh); 
+        projectiles.splice(i,1);
+        if(playerHP<=0){ playerHP=0; onPlayerDeath(); }
+        updateHUD(); continue;
+      }
+    }
+    if(p.mesh.position.length()>500){ scene.remove(p.mesh); projectiles.splice(i,1); }
+  }
+}
+
+// ---------- TURRET AI ----------
+function turretAI(delta){
+    if(!turret || turretHP <= 0) return; // ⚠️ Ajout de la condition turretHP
+    turretFireTimer -= delta;
+
+    const papTargets = paps.filter(s => s.mesh.position.distanceTo(turret.position) < TURRET_RANGE);
+    if(papTargets.length > 0 && turretFireTimer <= 0){
+        const t = papTargets[0]; 
+        const origin = turret.position.clone(); origin.y += 0.8;
+        const dir = t.mesh.position.clone().sub(origin); 
+        spawnProjectile(origin, dir,'turret', t.mesh);
+        turretFireTimer = TURRET_FIRE_COOLDOWN;
+    } else {
+        const distP = player ? player.position.distanceTo(turret.position) : Infinity;
+        if(distP < TURRET_RANGE && turretFireTimer <= 0){
+            const origin = turret.position.clone(); origin.y += 0.8;
+            const dir = player.position.clone().sub(origin); 
+            spawnProjectile(origin, dir, 'turret', player);
+            turretFireTimer = TURRET_FIRE_COOLDOWN * 0.8;
+        }
+    }
+}
+
+function updatePaps(delta){
+  for(let i=paps.length-1;i>=0;i--){
+    const s=paps[i];
+    const dir=turret.position.clone().sub(s.mesh.position); dir.y=0;
+    const dist=dir.length();
+    if(dist>1.1){ dir.normalize(); s.mesh.position.addScaledVector(dir,s.speed*delta*60); s.mesh.lookAt(turret.position.x,s.mesh.position.y,turret.position.z); }
+    else{ turretHP-=PAP_DAMAGE_PER_SEC*delta; if(turretHP<=0){ turretHP=0; onTurretDestroyed(); } updateHUD(); }
+  }
+}
+
+function spawnRoutine(delta){
+  if(!gameStarted||!turret||turretHP<=0) return;
+  spawnTimer-=delta;
+  if(spawnTimer<=0){
+    if(paps.length<MAX_PAPS_ACTIVE){
+      const sideX=(Math.random()>0.5?-1:1)*(12+Math.random()*6); // avant 8+Math.random()*6
+const startZ=-25+Math.random()*6; // avant -20+Math.random()*6
+spawnPapAt(sideX,startZ,0.03+Math.random()*0.02);
+ 
+    }
+    spawnTimer=SPAWN_INTERVAL;
+  }
+}
+
+function updateAttackRing(){
+  if(!attackRing||!turret) return;
+  attackRing.position.x=turret.position.x; attackRing.position.z=turret.position.z;
+  const papPresent=paps.some(p=>p.mesh.position.distanceTo(turret.position)<=TURRET_RANGE);
+  attackRing.material.color.set(papPresent?0x22ff44:0xff4444);
+}
+
+function onPlayerDeath(){
+    gameStarted = false;
+    document.getElementById('messageDeath').style.display = 'block';
+    // Remise à zéro de la position du joueur
+    if(player) player.position.set(0, PLAYER_HEIGHT, 0);
+
+    // Écoute sur Entrée pour reset
+    function restartListener(e){
+        if(e.key === 'Enter'){
+            document.getElementById('messageDeath').style.display = 'none';
+            resetAll();
+            gameStarted = true;
+            window.removeEventListener('keydown', restartListener);
+        }
+    }
+    window.addEventListener('keydown', restartListener);
+}
+
+function onTurretDestroyed(){
+    paps.forEach(p => scene.remove(p.mesh)); paps = [];
+    projectiles.forEach(p => scene.remove(p.mesh)); projectiles = [];
+
+    messageFinish.style.display = 'block';
+    messageFinish.innerHTML = `
+        Bravo — tu as détruit la tourelle !<br>
+        Appuie sur <strong>Entrée</strong> pour continuer
+    `;
+    updateHUD();
+
+    // Listener pour passage au niveau suivant
+    function nextLevelListener(e){
+        if(e.key === 'Enter'){
+            window.location.href = 'niveau4.html';
+            window.removeEventListener('keydown', nextLevelListener);
+        }
+    }
+    window.addEventListener('keydown', nextLevelListener);
+}
+
+function animate(){
+  requestAnimationFrame(animate);
+  const delta=clock.getDelta(); if(mixer) mixer.update(delta);
+  if(!gameStarted){ camera.position.lerp(new THREE.Vector3(0,2.5,6),0.05); camera.lookAt(0,0,0); }
+  else {
+    if(!canPlayerShoot){ playerShootTimer+=delta; if(playerShootTimer>=PLAYER_SHOOT_COOLDOWN){ canPlayerShoot=true; playerShootTimer=0; } }
+    movePlayer(); updateProjectiles(delta); turretAI(delta); updatePaps(delta); spawnRoutine(delta); updateAttackRing(); updateHUD();
+  }
+  renderer.render(scene,camera);
+}
+
+function movePlayer(){
+  if(!player) return;
+  if(keys.z) player.position.z-=MOVE_SPEED;
+  if(keys.s) player.position.z+=MOVE_SPEED;
+  if(keys.q) player.position.x-=MOVE_SPEED;
+  if(keys.d) player.position.x+=MOVE_SPEED;
+
+  const dir=new THREE.Vector3((keys.d?1:0)-(keys.q?1:0),0,(keys.s?0:0)-(keys.z?1:0));
+  if(dir.lengthSq()>0){ dir.normalize(); player.lookAt(player.position.x+dir.x,player.position.y,player.position.z+dir.z); }
+
+  velocityY+=GRAVITY; player.position.y+=velocityY;
+  if(player.position.y<PLAYER_HEIGHT){ player.position.y=PLAYER_HEIGHT; velocityY=0; canJump=true; } else canJump=false;
+
+  const camOffset=new THREE.Vector3(0,2.5,6); const camPos=player.position.clone().add(camOffset);
+  camera.position.lerp(camPos,0.08); camera.lookAt(player.position);
+}
+
+function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth,window.innerHeight); }
+</script>
+</body>
+</html>
+>>>>>>> master
